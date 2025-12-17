@@ -1,66 +1,67 @@
-# Xray + Tor 代理方案
+# Xray + Tor Proxy Solution
 
-> ⚠️ **免责声明 / Disclaimer**
+[中文文档](README_CN.md)
+
+> ⚠️ **Disclaimer**
 > 
-> 本项目仅供学习和研究网络技术使用。使用本项目前，请确保您了解并遵守当地法律法规。
+> This project is for **educational and research purposes only**. Before using this project, please ensure you understand and comply with all applicable laws and regulations in your jurisdiction.
 > 
-> **关于 Tor 网络：**
-> - Tor（The Onion Router）是一个合法的隐私保护工具，被记者、活动家和普通用户用于保护网络隐私
-> - 在大多数国家，使用 Tor 是合法的，但在某些地区可能受到限制
-> - 本项目不鼓励、不支持任何非法活动
+> **About Tor:**
+> - Tor (The Onion Router) is a legitimate privacy tool used by journalists, activists, and regular users to protect online privacy
+> - Using Tor is legal in most countries, but may be restricted in some regions
+> - This project does not encourage or support any illegal activities
 > 
-> **使用者责任：**
-> - 您应对使用本项目的行为负全部责任
-> - 请勿将本项目用于任何违法、侵权或不道德的活动
-> - 作者不对因使用本项目而产生的任何直接或间接损失承担责任
-> 
-> **This project is for educational and research purposes only. By using this project, you agree to comply with all applicable laws and regulations in your jurisdiction. The author is not responsible for any misuse or illegal activities conducted with this software.**
+> **User Responsibility:**
+> - You are solely responsible for your use of this project
+> - Do not use this project for any illegal, infringing, or unethical activities
+> - The author is not liable for any direct or indirect damages arising from the use of this project
 
 ---
 
-## 项目说明
+## Overview
 
-本项目提供两套安装脚本，用于在不同环境下部署 Xray + Tor 代理：
+This project provides installation scripts for deploying Xray + Tor proxy on different environments:
 
-### 功能特性
+### Features
 
-- ✅ 访问普通网站走 Xray（直连或代理）
-- ✅ 暗网(.onion)流量走 Tor
-- ✅ 可选：所有流量走 Tor
-- ✅ 支持多种入站协议（VLESS, VMess, Trojan, Shadowsocks）
-- ✅ 智能路由分流
+- ✅ Regular websites via Xray (direct or proxy)
+- ✅ Dark web (.onion) traffic via Tor
+- ✅ Optional: All traffic via Tor
+- ✅ Multiple inbound protocols (VLESS, VMess, Shadowsocks)
+- ✅ Smart traffic routing
 
-### 环境支持
+### Supported Environments
 
-| 环境类型 | 脚本文件 | 说明 |
-|---------|---------|------|
-| Linux VPS | `install-linux.sh` | 有 root 权限的 Linux 系统 |
-| FreeBSD (serv00/hostuno) | `install-freebsd.sh` | 无 root 权限的 FreeBSD 系统 |
+| Environment | Script | Description |
+|-------------|--------|-------------|
+| Linux VPS | `install-linux.sh` | Linux with root privileges |
+| FreeBSD (serv00/hostuno) | `install-freebsd.sh` | FreeBSD without root privileges |
 
-## 目录结构
+## Directory Structure
 
 ```
-├── README.md                    # 本文档
+├── README.md                    # This document
+├── README_CN.md                 # Chinese documentation
 ├── scripts/
-│   ├── install-linux.sh         # Linux VPS 安装脚本
-│   └── install-freebsd.sh       # FreeBSD 安装脚本
+│   ├── install-linux.sh         # Linux VPS installation script
+│   └── install-freebsd.sh       # FreeBSD installation script
 ├── configs/
-│   ├── xray-config.json         # Xray 配置模板
-│   ├── torrc                    # Tor 配置模板
-│   └── xray-tor-all.json        # 全流量走Tor的Xray配置
+│   ├── xray-config.json         # Xray config template
+│   ├── torrc                    # Tor config template
+│   └── xray-tor-all.json        # Full Tor mode config
 └── docs/
-    └── usage.md                 # 使用说明
+    └── usage.md                 # Usage guide
 ```
 
-## 快速开始
+## Quick Start
 
-### Linux VPS（有 root 权限）
+### Linux VPS (with root)
 
 ```bash
-# 下载并运行安装脚本
+# One-line installation
 bash <(curl -Ls https://raw.githubusercontent.com/hxzlplp7/xray-tor/main/scripts/install-linux.sh)
 
-# 或本地运行
+# Or run locally
 chmod +x scripts/install-linux.sh
 sudo ./scripts/install-linux.sh
 ```
@@ -68,84 +69,127 @@ sudo ./scripts/install-linux.sh
 ### FreeBSD (serv00/hostuno)
 
 ```bash
-# SSH 连接到 serv00/hostuno 后
-# 上传脚本到服务器
-scp scripts/install-freebsd.sh user@server:~/
+# After SSH connection
+# Download the script
+curl -O https://raw.githubusercontent.com/hxzlplp7/xray-tor/main/scripts/install-freebsd.sh
 
-# 运行安装脚本
-chmod +x ~/install-freebsd.sh
+# Run installation
+chmod +x install-freebsd.sh
 ./install-freebsd.sh
 ```
 
-## 架构说明
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        客户端                                    │
+│                         Client                                   │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Xray Inbound                                  │
-│           (VLESS/VMess/Trojan/Shadowsocks)                       │
+│             (VLESS/VMess/Shadowsocks)                            │
 └─────────────────────────┬───────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Xray 路由模块                                   │
+│                   Xray Routing Module                            │
 │  ┌─────────────────────────────────────────────────────────────┐│
-│  │ 规则1: .onion 域名 → Tor Outbound                           ││
-│  │ 规则2: 普通流量 → Direct Outbound (或 Proxy)                ││
-│  │ 规则3: 全流量模式 → Tor Outbound                            ││
+│  │ Rule 1: .onion domains → Tor Outbound                       ││
+│  │ Rule 2: Other traffic → Direct Outbound (or Proxy)          ││
+│  │ Rule 3: Full Tor mode → Tor Outbound                        ││
 │  └─────────────────────────────────────────────────────────────┘│
 └──────────────┬──────────────────────────────────┬───────────────┘
                │                                  │
                ▼                                  ▼
 ┌──────────────────────────┐      ┌──────────────────────────────┐
 │     Direct Outbound      │      │       Tor Outbound           │
-│     (直接访问互联网)      │      │   (SOCKS5 → 127.0.0.1:9050) │
+│   (Direct Internet)      │      │   (SOCKS5 → 127.0.0.1:9050)  │
 └──────────────────────────┘      └──────────────┬───────────────┘
                                                  │
                                                  ▼
                                   ┌──────────────────────────────┐
-                                  │         Tor 进程              │
-                                  │    (SOCKS5 @ 9050)           │
+                                  │         Tor Process          │
+                                  │      (SOCKS5 @ 9050)         │
                                   └──────────────────────────────┘
 ```
 
-## 配置说明
+## Routing Modes
 
-### 路由模式
+### 1. Smart Routing (Default)
+- `.onion` domains → Tor
+- Other traffic → Direct
 
-1. **智能分流模式（默认）**
-   - `.onion` 域名 → Tor
-   - 其他流量 → 直连
+### 2. Full Tor Mode
+- All traffic goes through Tor network
 
-2. **全 Tor 模式**
-   - 所有流量都经过 Tor 网络
-
-### 切换模式
+### Switch Mode
 
 ```bash
 # Linux
-sudo xray-tor switch-mode
+xray-tor switch
 
 # FreeBSD (serv00/hostuno)
-~/bin/xray-tor switch-mode
+~/xray-tor/bin/xray-tor switch
 ```
 
-## 注意事项
+## Management Commands
 
-1. **serv00/hostuno 限制**
-   - 无 root 权限，需要编译安装
-   - 使用用户级 systemd 或 cron 管理服务
-   - 端口需在面板中开放
+### Linux
 
-2. **安全建议**
-   - 定期更新 Xray 和 Tor
-   - 使用强密码/UUID
-   - 建议开启 TLS
+```bash
+xray-tor status     # Check service status
+xray-tor restart    # Restart all services
+xray-tor stop       # Stop services
+xray-tor start      # Start services
+xray-tor log        # View Xray logs
+xray-tor tor-log    # View Tor logs
+xray-tor info       # Show connection info
+xray-tor test       # Test Tor connection
+xray-tor switch     # Switch routing mode
+```
 
-## 许可证
+### FreeBSD
 
-MIT License
+```bash
+~/xray-tor/bin/xray-tor start    # Start services
+~/xray-tor/bin/xray-tor stop     # Stop services
+~/xray-tor/bin/xray-tor status   # Check status
+~/xray-tor/bin/xray-tor info     # Show connection info
+```
+
+## Important Notes
+
+### serv00/hostuno Limitations
+- No root privileges, requires user-level installation
+- Uses cron for service keepalive
+- Ports must be opened in the control panel
+
+### Security Recommendations
+- Regularly update Xray and Tor
+- Use strong passwords/UUIDs
+- Enable TLS when possible
+
+## Uninstall
+
+### Linux
+
+```bash
+sudo ./scripts/install-linux.sh uninstall
+```
+
+### FreeBSD
+
+```bash
+~/xray-tor/bin/xray-tor stop
+crontab -l | grep -v keepalive | crontab -
+rm -rf ~/xray-tor
+```
+
+## License
+
+MIT License - See [LICENSE](LICENSE) for details.
+
+---
+
+**⭐ If this project helps you, please give it a star!**
