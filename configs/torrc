@@ -1,0 +1,64 @@
+# Tor 配置文件模板
+# 适用于 Linux VPS 和 FreeBSD
+
+# ==================== 基础配置 ====================
+
+# SOCKS 代理端口 (Xray 通过此端口连接 Tor)
+SocksPort 127.0.0.1:9050
+
+# DNS 端口 (用于解析 .onion 域名)
+DNSPort 127.0.0.1:5353
+
+# 自动映射 .onion 地址
+AutomapHostsOnResolve 1
+AutomapHostsSuffixes .onion
+
+# ==================== 日志配置 ====================
+
+# 日志级别: debug, info, notice, warn, err
+Log notice file /var/log/tor/notices.log
+
+# ==================== 数据目录 ====================
+
+# Tor 数据目录 (存储密钥、缓存等)
+DataDirectory /var/lib/tor
+
+# ==================== 性能优化 ====================
+
+# 使用所有可用 CPU (0 = 自动)
+NumCPUs 0
+
+# 减少磁盘写入
+AvoidDiskWrites 1
+
+# ==================== 安全设置 ====================
+
+# 控制端口 (可选，用于管理)
+# ControlPort 9051
+# CookieAuthentication 1
+
+# ==================== 隐藏服务 (可选) ====================
+
+# 如果需要运行 .onion 服务，取消下面的注释
+# HiddenServiceDir /var/lib/tor/hidden_service/
+# HiddenServicePort 80 127.0.0.1:8080
+
+# ==================== 网桥配置 (可选) ====================
+
+# 如果 Tor 被封锁，可以使用网桥
+# UseBridges 1
+# Bridge obfs4 IP:PORT FINGERPRINT cert=... iat-mode=0
+
+# ==================== 出口节点限制 (可选) ====================
+
+# 指定出口节点国家 (ISO 代码)
+# ExitNodes {us},{gb},{de}
+# StrictNodes 1
+
+# ==================== FreeBSD/用户级配置 ====================
+
+# 对于无 root 权限的环境 (如 serv00)，使用以下配置:
+# SocksPort 127.0.0.1:19050
+# DNSPort 127.0.0.1:15353
+# DataDirectory ~/xray-tor/tor-data
+# Log notice file ~/xray-tor/logs/tor.log
