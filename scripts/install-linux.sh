@@ -63,13 +63,15 @@ install_dependencies() {
     log_step "安装依赖..."
     case $OS in
         ubuntu|debian)
-            apt-get update -y && apt-get install -y curl wget unzip jq tor netcat-openbsd
+            apt-get update -y
+            apt-get --fix-broken install -y 2>/dev/null || true
+            apt-get install -y curl wget unzip jq tor
             ;;
         centos|rhel|fedora|rocky)
-            dnf install -y epel-release 2>/dev/null || yum install -y epel-release
-            dnf install -y curl wget unzip jq tor nmap-ncat 2>/dev/null || yum install -y curl wget unzip jq tor nmap-ncat
+            dnf install -y epel-release 2>/dev/null || yum install -y epel-release || true
+            dnf install -y curl wget unzip jq tor 2>/dev/null || yum install -y curl wget unzip jq tor
             ;;
-        arch) pacman -Sy --noconfirm curl wget unzip jq tor gnu-netcat ;;
+        arch) pacman -Sy --noconfirm curl wget unzip jq tor ;;
     esac
 }
 
