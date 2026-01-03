@@ -438,23 +438,21 @@ configure_xray() {
         
         # 生成私钥
         KEYS=$("$BIN_DIR/xray" x25519 2>&1)
+        log_info "xray x25519 输出:"
+        echo "$KEYS"
         
-        # 新版 Xray 输出格式: PrivateKey: xxx (注意没有空格)
-        PRIVATE_KEY=$(echo "$KEYS" | awk '/PrivateKey/ {print $2}')
+        # 提取私钥 (兼容新旧格式: PrivateKey: xxx 或 Private key: xxx)
+        PRIVATE_KEY=$(echo "$KEYS" | grep -E "(PrivateKey|Private)" | head -1 | awk '{print $2}')
         
-        # 如果上面失败，尝试旧格式
-        if [ -z "$PRIVATE_KEY" ]; then
-            PRIVATE_KEY=$(echo "$KEYS" | awk '/Private/ {print $3}')
-        fi
+        log_info "提取的私钥: $PRIVATE_KEY"
         
-        # 用私钥生成公钥 (新版 Xray 必须这样做)
+        # 用私钥生成公钥
         if [ -n "$PRIVATE_KEY" ]; then
             PUB_OUTPUT=$("$BIN_DIR/xray" x25519 -i "$PRIVATE_KEY" 2>&1)
-            PUBLIC_KEY=$(echo "$PUB_OUTPUT" | awk '/PublicKey/ {print $2}')
-            # 如果上面失败，尝试旧格式
-            if [ -z "$PUBLIC_KEY" ]; then
-                PUBLIC_KEY=$(echo "$PUB_OUTPUT" | awk '/Public/ {print $3}')
-            fi
+            log_info "xray x25519 -i 输出:"
+            echo "$PUB_OUTPUT"
+            PUBLIC_KEY=$(echo "$PUB_OUTPUT" | grep -E "(PublicKey|Public)" | head -1 | awk '{print $2}')
+            log_info "提取的公钥: $PUBLIC_KEY"
         fi
         
         # 验证密钥
