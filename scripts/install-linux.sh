@@ -85,35 +85,89 @@ create_directories() {
     chmod 700 "$TOR_DATA_DIR"
 }
 
+fix_dns() {
+    log_step "检查 DNS 配置..."
+    
+    # 修复 hostname 解析问题
+    HOSTNAME=$(hostname)
+    if ! grep -q "$HOSTNAME" /etc/hosts 2>/dev/null; then
+        echo "127.0.0.1 $HOSTNAME" >> /etc/hosts
+        log_info "已修复 hostname 解析: $HOSTNAME"
+    fi
+    
+    # 检查 DNS 是否工作
+    if ! ping -c 1 -W 3 google.com &>/dev/null && ! ping -c 1 -W 3 8.8.8.8 &>/dev/null; then
+        log_warn "DNS 可能有问题，尝试修复..."
+        # 备份并添加公共 DNS
+        cp /etc/resolv.conf /etc/resolv.conf.bak 2>/dev/null || true
+        cat > /etc/resolv.conf << EOF
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+nameserver 223.5.5.5
+EOF
+        log_info "已添加公共 DNS"
+    fi
+}
+
 install_dependencies() {
     log_step "检查基础依赖..."
     
-    # 只安装必要的工具
+    # 修复 DNS
+    fix_dns
+    
+    # curl 或 wget (必需)
     if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
-        log_info "安装 curl/wget..."
+        log_info "安装 curl..."
         case $OS in
-            ubuntu|debian) apt-get update -y && apt-get install -y curl ;;
-            centos|rhel|fedora|rocky) dnf install -y curl 2>/dev/null || yum install -y curl ;;
-            arch) pacman -Sy --noconfirm curl ;;
+            ubuntu|debian) apt-get update -y 2>/dev/null; apt-get install -y curl 2>/dev/null || true ;;
+            centos|rhel|fedora|rocky) dnf install -y curl 2>/dev/null || yum install -y curl 2>/dev/null || true ;;
+            arch) pacman -Sy --noconfirm curl 2>/dev/null || true ;;
+        esac
+    fi
+    
+    # 再次检查，如果还是没有则报错
+    if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
+        log_error "无法安装 curl 或 wget，请手动安装后重试"
+        exit 1
+    fi
+    
+    # unzip (必需)
+    if ! command -v unzip &>/dev/null; then
+        log_info "安装 unzip..."
+        case $OS in
+            ubuntu|debian) apt-get install -y unzip 2>/dev/null || true ;;
+            centos|rhel|fedora|rocky) dnf install -y unzip 2>/dev/null || yum install -y unzip 2>/dev/null || true ;;
+            arch) pacman -Sy --noconfirm unzip 2>/dev/null || true ;;
         esac
     fi
     
     if ! command -v unzip &>/dev/null; then
-        log_info "安装 unzip..."
-        case $OS in
-            ubuntu|debian) apt-get install -y unzip ;;
-            centos|rhel|fedora|rocky) dnf install -y unzip 2>/dev/null || yum install -y unzip ;;
-            arch) pacman -Sy --noconfirm unzip ;;
-        esac
+        log_error "无法安装 unzip，请手动安装后重试"
+        exit 1
     fi
     
+    # jq - 直接下载二进制文件 (可选，用于 switch 功能)
     if ! command -v jq &>/dev/null; then
-        log_info "安装 jq..."
-        case $OS in
-            ubuntu|debian) apt-get install -y jq ;;
-            centos|rhel|fedora|rocky) dnf install -y jq 2>/dev/null || yum install -y jq ;;
-            arch) pacman -Sy --noconfirm jq ;;
+        log_info "下载 jq 二进制..."
+        JQ_ARCH="jq-linux-amd64"
+        case $ARCH in
+            aarch64|arm64) JQ_ARCH="jq-linux-arm64" ;;
+            armv7l) JQ_ARCH="jq-linux-armhf" ;;
         esac
+        
+        JQ_URL="https://github.com/jqlang/jq/releases/download/jq-1.7.1/${JQ_ARCH}"
+        
+        if command -v curl &>/dev/null; then
+            curl -sL "$JQ_URL" -o /usr/local/bin/jq 2>/dev/null && chmod +x /usr/local/bin/jq
+        else
+            wget -qO /usr/local/bin/jq "$JQ_URL" 2>/dev/null && chmod +x /usr/local/bin/jq
+        fi
+        
+        if command -v jq &>/dev/null; then
+            log_info "jq 安装成功"
+        else
+            log_warn "jq 安装失败，switch 功能将不可用（不影响主功能）"
+        fi
     fi
 }
 
