@@ -452,8 +452,14 @@ configure_xray() {
             log_info "xray x25519 -i 输出:"
             echo "$PUB_OUTPUT"
             
-            # 提取公钥
-            PUBLIC_KEY=$(echo "$PUB_OUTPUT" | grep -i "Public" | head -n 1 | sed 's/^.*: *//' | tr -d '[:space:]')
+            # 提取公钥 (新版 Xray 输出中公钥字段名为 Password)
+            PUBLIC_KEY=$(echo "$PUB_OUTPUT" | grep -i "Password" | head -n 1 | sed 's/^.*: *//' | tr -d '[:space:]')
+            
+            # 如果 Password 为空，尝试旧格式 PublicKey
+            if [ -z "$PUBLIC_KEY" ]; then
+                PUBLIC_KEY=$(echo "$PUB_OUTPUT" | grep -i "Public" | head -n 1 | sed 's/^.*: *//' | tr -d '[:space:]')
+            fi
+            
             log_info "提取的公钥: $PUBLIC_KEY"
         fi
         
