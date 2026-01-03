@@ -424,6 +424,35 @@ Tor SOCKS: 127.0.0.1:$TOR_SOCKS_PORT
 ==============================
 EOF
     
+    # 生成分享链接
+    REMARK="Xray-Tor-${SERVER_IP}"
+    REMARK_ENCODED=$(echo -n "$REMARK" | sed 's/ /%20/g; s/:/%3A/g; s/\//%2F/g')
+    
+    if [ "$PROTO" = "1" ]; then
+        # VLESS 链接格式: vless://uuid@server:port?type=tcp&security=none#remark
+        SHARE_LINK="vless://${USER_UUID}@${SERVER_IP}:${XRAY_PORT}?type=tcp&security=none#${REMARK_ENCODED}"
+    elif [ "$PROTO" = "2" ]; then
+        # VMess 链接格式: vmess://base64(json)
+        VMESS_JSON="{\"v\":\"2\",\"ps\":\"${REMARK}\",\"add\":\"${SERVER_IP}\",\"port\":\"${XRAY_PORT}\",\"id\":\"${USER_UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"\",\"path\":\"/xray\",\"tls\":\"\"}"
+        VMESS_BASE64=$(echo -n "$VMESS_JSON" | base64 -w 0 2>/dev/null || echo -n "$VMESS_JSON" | base64)
+        SHARE_LINK="vmess://${VMESS_BASE64}"
+    else
+        # Shadowsocks 2022 链接格式: ss://method:password@server:port#remark
+        SS_USERINFO=$(echo -n "2022-blake3-aes-128-gcm:${USER_UUID}" | base64 -w 0 2>/dev/null || echo -n "2022-blake3-aes-128-gcm:${USER_UUID}" | base64)
+        SHARE_LINK="ss://${SS_USERINFO}@${SERVER_IP}:${XRAY_PORT}#${REMARK_ENCODED}"
+    fi
+    
+    # 保存分享链接
+    echo "$SHARE_LINK" > "$XRAY_CONFIG_DIR/share.txt"
+    
+    # 追加到 info.txt
+    cat >> "$XRAY_CONFIG_DIR/info.txt" << EOF
+
+========== 分享链接 ==========
+$SHARE_LINK
+==============================
+EOF
+    
     echo -e "${GREEN}配置完成!${NC}"
     cat "$XRAY_CONFIG_DIR/info.txt"
 }
@@ -542,9 +571,31 @@ case "$1" in
       echo "已卸载"
     fi
     ;;
+  share|link)
+    echo ""
+    echo "========== 分享链接 =========="
+    cat /usr/local/etc/xray/share.txt 2>/dev/null || echo "分享链接未找到"
+    echo "=============================="
+    echo ""
+    ;;
   *) 
     echo "Xray + Tor 管理工具"
-    echo "用法: xray-tor {status|restart|stop|start|log|tor-log|info|test|test-onion|switch|uninstall}" 
+    echo ""
+    echo "用法: xray-tor <命令>"
+    echo ""
+    echo "命令:"
+    echo "  status    - 查看服务状态"
+    echo "  start     - 启动服务"
+    echo "  stop      - 停止服务"
+    echo "  restart   - 重启服务"
+    echo "  info      - 查看连接信息"
+    echo "  share     - 显示分享链接"
+    echo "  test      - 测试 Tor 连接"
+    echo "  test-onion- 测试 .onion 访问"
+    echo "  switch    - 切换路由模式"
+    echo "  log       - 查看 Xray 日志"
+    echo "  tor-log   - 查看 Tor 日志"
+    echo "  uninstall - 卸载"
     ;;
 esac
 MANAGER
