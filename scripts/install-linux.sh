@@ -436,13 +436,13 @@ configure_xray() {
         # 生成 x25519 密钥对
         log_info "生成 Reality 密钥..."
         
-        # 生成私钥
         KEYS=$("$BIN_DIR/xray" x25519 2>&1)
         log_info "xray x25519 输出:"
         echo "$KEYS"
         
-        # 提取私钥 (兼容新旧格式: PrivateKey: xxx 或 Private key: xxx)
-        PRIVATE_KEY=$(echo "$KEYS" | grep -E "(PrivateKey|Private)" | head -1 | awk '{print $2}')
+        # 提取私钥 (兼容: "PrivateKey: xxx", "Private key: xxx", "PrivateKey:xxx")
+        # grep 找包含 Private 的行 -> head 取第一行 -> sed 删除冒号及之前的内容 -> tr 删除空白
+        PRIVATE_KEY=$(echo "$KEYS" | grep -i "Private" | head -n 1 | sed 's/^.*: *//' | tr -d '[:space:]')
         
         log_info "提取的私钥: $PRIVATE_KEY"
         
@@ -451,7 +451,9 @@ configure_xray() {
             PUB_OUTPUT=$("$BIN_DIR/xray" x25519 -i "$PRIVATE_KEY" 2>&1)
             log_info "xray x25519 -i 输出:"
             echo "$PUB_OUTPUT"
-            PUBLIC_KEY=$(echo "$PUB_OUTPUT" | grep -E "(PublicKey|Public)" | head -1 | awk '{print $2}')
+            
+            # 提取公钥
+            PUBLIC_KEY=$(echo "$PUB_OUTPUT" | grep -i "Public" | head -n 1 | sed 's/^.*: *//' | tr -d '[:space:]')
             log_info "提取的公钥: $PUBLIC_KEY"
         fi
         
