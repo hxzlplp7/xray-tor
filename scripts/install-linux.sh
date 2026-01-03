@@ -440,23 +440,20 @@ configure_xray() {
         log_info "xray x25519 输出:"
         echo "$KEYS"
         
-        # 新版 Xray 输出格式:
-        # 第1行: PrivateKey: xxx
-        # 第2行: Password: xxx (这就是公钥!)
-        # 第3行: Hash32: xxx
-        
-        # 直接按行提取，避免 grep 问题
-        PRIVATE_KEY=$(echo "$KEYS" | sed -n '1p' | cut -d':' -f2 | tr -d ' ')
-        PUBLIC_KEY=$(echo "$KEYS" | sed -n '2p' | cut -d':' -f2 | tr -d ' ')
+        # 使用字段名匹配 (不依赖行号，避免控制字符/CRLF问题)
+        # 新版 Xray: PrivateKey + Password (公钥)
+        PRIVATE_KEY=$(echo "$KEYS" | grep -i '^PrivateKey:' | head -n1 | cut -d':' -f2- | tr -d '[:space:]')
+        PUBLIC_KEY=$(echo "$KEYS" | grep -i '^Password:' | head -n1 | cut -d':' -f2- | tr -d '[:space:]')
         
         log_info "提取的私钥: $PRIVATE_KEY"
         log_info "提取的公钥: $PUBLIC_KEY"
         
         # 验证密钥
         if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
-            log_error "密钥生成失败"
-            log_info "xray x25519 输出: $KEYS"
-            log_info "尝试手动运行: $BIN_DIR/xray x25519"
+            log_error "Reality 密钥解析失败"
+            log_warn "RAW KEYS:"
+            printf '%q\n' "$KEYS"
+            log_warn "可重新运行脚本选择 VLESS-TCP 协议"
             exit 1
         fi
         
