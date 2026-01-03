@@ -440,28 +440,17 @@ configure_xray() {
         log_info "xray x25519 输出:"
         echo "$KEYS"
         
-        # 提取私钥 (兼容: "PrivateKey: xxx", "Private key: xxx", "PrivateKey:xxx")
-        # grep 找包含 Private 的行 -> head 取第一行 -> sed 删除冒号及之前的内容 -> tr 删除空白
-        PRIVATE_KEY=$(echo "$KEYS" | grep -i "Private" | head -n 1 | sed 's/^.*: *//' | tr -d '[:space:]')
+        # 新版 Xray 输出格式:
+        # 第1行: PrivateKey: xxx
+        # 第2行: Password: xxx (这就是公钥!)
+        # 第3行: Hash32: xxx
+        
+        # 直接按行提取，避免 grep 问题
+        PRIVATE_KEY=$(echo "$KEYS" | sed -n '1p' | cut -d':' -f2 | tr -d ' ')
+        PUBLIC_KEY=$(echo "$KEYS" | sed -n '2p' | cut -d':' -f2 | tr -d ' ')
         
         log_info "提取的私钥: $PRIVATE_KEY"
-        
-        # 用私钥生成公钥
-        if [ -n "$PRIVATE_KEY" ]; then
-            PUB_OUTPUT=$("$BIN_DIR/xray" x25519 -i "$PRIVATE_KEY" 2>&1)
-            log_info "xray x25519 -i 输出:"
-            echo "$PUB_OUTPUT"
-            
-            # 提取公钥 (新版 Xray 输出中公钥字段名为 Password)
-            PUBLIC_KEY=$(echo "$PUB_OUTPUT" | grep -i "Password" | head -n 1 | sed 's/^.*: *//' | tr -d '[:space:]')
-            
-            # 如果 Password 为空，尝试旧格式 PublicKey
-            if [ -z "$PUBLIC_KEY" ]; then
-                PUBLIC_KEY=$(echo "$PUB_OUTPUT" | grep -i "Public" | head -n 1 | sed 's/^.*: *//' | tr -d '[:space:]')
-            fi
-            
-            log_info "提取的公钥: $PUBLIC_KEY"
-        fi
+        log_info "提取的公钥: $PUBLIC_KEY"
         
         # 验证密钥
         if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
