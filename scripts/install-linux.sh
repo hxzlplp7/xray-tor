@@ -6,7 +6,7 @@
 # 特点: 直接下载二进制文件，无需包管理器
 # ============================================================
 
-set -e
+# 不使用 set -e，手动处理错误以提高兼容性
 
 # 颜色定义
 RED='\033[0;31m'
@@ -229,28 +229,69 @@ download_tor() {
         }
     fi
     
-    tar -xzf tor-bundle.tar.gz
+    tar -xzf tor-bundle.tar.gz || {
+        log_error "Tor 解压失败"
+        install_tor_from_package
+        return
+    }
     
-    # Expert Bundle 结构: tor/tor, tor/pluggable_transports/, tor/data/
+    # 列出解压内容用于调试
+    log_info "解压内容: $(ls -la)"
+    
+    # Expert Bundle 14.x 结构可能是:
+    # - tor/tor (旧版)
+    # - tor/libevent-*.so, tor/libssl.so.*, tor/<tor binary> (新版)
+    TOR_FOUND=0
+    
+    # 方法1: 直接在 tor/ 目录找 tor 二进制
     if [ -f "tor/tor" ]; then
         mv tor/tor "$BIN_DIR/"
+        TOR_FOUND=1
+    fi
+    
+    # 方法2: 查找任何名为 tor 的可执行文件
+    if [ "$TOR_FOUND" = "0" ]; then
+        TOR_BIN_PATH=$(find . -name "tor" -type f -executable 2>/dev/null | head -1)
+        if [ -n "$TOR_BIN_PATH" ]; then
+            mv "$TOR_BIN_PATH" "$BIN_DIR/tor"
+            TOR_FOUND=1
+        fi
+    fi
+    
+    # 方法3: 在解压目录中查找
+    if [ "$TOR_FOUND" = "0" ] && [ -d "tor" ]; then
+        # 新版 Expert Bundle 结构
+        for f in tor/*; do
+            if file "$f" 2>/dev/null | grep -q "executable\|ELF"; then
+                BASENAME=$(basename "$f")
+                if [ "$BASENAME" = "tor" ] || echo "$BASENAME" | grep -q "^tor$"; then
+                    mv "$f" "$BIN_DIR/tor"
+                    TOR_FOUND=1
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    if [ "$TOR_FOUND" = "1" ]; then
         chmod +x "$BIN_DIR/tor"
         # 复制 pluggable transports (如果有)
         if [ -d "tor/pluggable_transports" ]; then
             cp -r tor/pluggable_transports "$INSTALL_DIR/"
         fi
+        # 复制依赖库 (如果有)
+        if ls tor/*.so* 1>/dev/null 2>&1; then
+            mkdir -p "$INSTALL_DIR/lib"
+            cp tor/*.so* "$INSTALL_DIR/lib/" 2>/dev/null || true
+        fi
+        rm -rf tor-bundle.tar.gz tor
+        ln -sf "$BIN_DIR/tor" /usr/local/bin/tor
+        log_info "Tor v${TOR_VERSION} 安装完成"
     else
-        log_error "Tor 解压失败"
+        log_warn "无法从 Expert Bundle 中提取 Tor，尝试包管理器..."
+        rm -rf tor-bundle.tar.gz tor
         install_tor_from_package
-        return
     fi
-    
-    rm -rf tor-bundle.tar.gz tor
-    
-    # 创建软链接
-    ln -sf "$BIN_DIR/tor" /usr/local/bin/tor
-    
-    log_info "Tor v${TOR_VERSION} 安装完成"
 }
 
 install_tor_from_package() {
