@@ -363,8 +363,8 @@ configure_xray() {
     read -p "Xray 端口 [默认 $DEFAULT_XRAY_PORT]: " XRAY_PORT
     XRAY_PORT=${XRAY_PORT:-$DEFAULT_XRAY_PORT}
     
-    echo "选择协议: 1) VLESS  2) VMess  3) Shadowsocks"
-    read -p "选择 [1-3, 默认 1]: " PROTO
+    echo "选择协议: 1) VLESS-Reality (推荐)  2) VLESS-TCP  3) VMess-WS  4) Shadowsocks"
+    read -p "选择 [1-4, 默认 1]: " PROTO
     PROTO=${PROTO:-1}
     
     echo "路由模式: 1) 智能分流(.onion走Tor)  2) 全流量走Tor"
@@ -372,14 +372,65 @@ configure_xray() {
     MODE=${MODE:-1}
     
     USER_UUID=$(generate_uuid)
-    SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ip.sb 2>/dev/null || echo "YOUR_IP")
+    
+    # 优先获取 IPv4，没有才用 IPv6
+    log_info "获取服务器 IP..."
+    SERVER_IPV4=$(curl -4 -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -4 -s --connect-timeout 5 ip.sb 2>/dev/null || echo "")
+    SERVER_IPV6=$(curl -6 -s --connect-timeout 5 ifconfig.me 2>/dev/null || curl -6 -s --connect-timeout 5 ip.sb 2>/dev/null || echo "")
+    
+    if [ -n "$SERVER_IPV4" ]; then
+        SERVER_IP="$SERVER_IPV4"
+        log_info "使用 IPv4: $SERVER_IP"
+    elif [ -n "$SERVER_IPV6" ]; then
+        SERVER_IP="$SERVER_IPV6"
+        log_info "使用 IPv6: $SERVER_IP"
+    else
+        SERVER_IP="YOUR_IP"
+        log_warn "无法获取 IP，请手动修改配置"
+    fi
     
     # 生成配置
     if [ "$PROTO" = "1" ]; then
-        PROTO_NAME="VLESS"
-        INBOUND='{"port":'$XRAY_PORT',"protocol":"vless","settings":{"clients":[{"id":"'$USER_UUID'"}],"decryption":"none"},"streamSettings":{"network":"tcp"}}'
+        # VLESS Reality
+        PROTO_NAME="VLESS-Reality"
+        
+        # 生成 x25519 密钥对
+        log_info "生成 Reality 密钥..."
+        KEYS=$("$BIN_DIR/xray" x25519 2>/dev/null)
+        PRIVATE_KEY=$(echo "$KEYS" | grep "Private" | awk '{print $3}')
+        PUBLIC_KEY=$(echo "$KEYS" | grep "Public" | awk '{print $3}')
+        
+        # 生成 shortId
+        SHORT_ID=$(head -c 8 /dev/urandom | xxd -p)
+        
+        # Reality 目标站点（伪装）
+        REALITY_DEST="www.microsoft.com:443"
+        REALITY_SNI="www.microsoft.com"
+        
+        INBOUND='{
+  "port": '$XRAY_PORT',
+  "protocol": "vless",
+  "settings": {
+    "clients": [{"id": "'$USER_UUID'", "flow": "xtls-rprx-vision"}],
+    "decryption": "none"
+  },
+  "streamSettings": {
+    "network": "tcp",
+    "security": "reality",
+    "realitySettings": {
+      "dest": "'$REALITY_DEST'",
+      "serverNames": ["'$REALITY_SNI'", "microsoft.com"],
+      "privateKey": "'$PRIVATE_KEY'",
+      "shortIds": ["'$SHORT_ID'", ""]
+    }
+  }
+}'
     elif [ "$PROTO" = "2" ]; then
-        PROTO_NAME="VMess"
+        # VLESS TCP (无加密)
+        PROTO_NAME="VLESS-TCP"
+        INBOUND='{"port":'$XRAY_PORT',"protocol":"vless","settings":{"clients":[{"id":"'$USER_UUID'"}],"decryption":"none"},"streamSettings":{"network":"tcp"}}'
+    elif [ "$PROTO" = "3" ]; then
+        PROTO_NAME="VMess-WS"
         INBOUND='{"port":'$XRAY_PORT',"protocol":"vmess","settings":{"clients":[{"id":"'$USER_UUID'","alterId":0}]},"streamSettings":{"network":"ws","wsSettings":{"path":"/xray"}}}'
     else
         PROTO_NAME="Shadowsocks"
@@ -437,15 +488,25 @@ EOF
     REMARK_ENCODED=$(echo -n "$REMARK" | sed 's/ /%20/g; s/:/%3A/g; s/\//%2F/g')
     
     if [ "$PROTO" = "1" ]; then
-        # VLESS 链接格式: vless://uuid@server:port?type=tcp&security=none#remark
-        SHARE_LINK="vless://${USER_UUID}@${SERVER_ADDR}:${XRAY_PORT}?type=tcp&security=none#${REMARK_ENCODED}"
+        # VLESS Reality 链接格式
+        SHARE_LINK="vless://${USER_UUID}@${SERVER_ADDR}:${XRAY_PORT}?type=tcp&security=reality&pbk=${PUBLIC_KEY}&sid=${SHORT_ID}&sni=${REALITY_SNI}&flow=xtls-rprx-vision&fp=chrome#${REMARK_ENCODED}"
+        
+        # 保存 Reality 密钥信息
+        cat >> "$XRAY_CONFIG_DIR/info.txt" << EOF
+Reality Public Key: $PUBLIC_KEY
+Reality Short ID: $SHORT_ID
+Reality SNI: $REALITY_SNI
+EOF
     elif [ "$PROTO" = "2" ]; then
+        # VLESS TCP 链接格式
+        SHARE_LINK="vless://${USER_UUID}@${SERVER_ADDR}:${XRAY_PORT}?type=tcp&security=none#${REMARK_ENCODED}"
+    elif [ "$PROTO" = "3" ]; then
         # VMess 链接格式: vmess://base64(json)
         VMESS_JSON="{\"v\":\"2\",\"ps\":\"${REMARK}\",\"add\":\"${SERVER_IP}\",\"port\":\"${XRAY_PORT}\",\"id\":\"${USER_UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"\",\"path\":\"/xray\",\"tls\":\"\"}"
         VMESS_BASE64=$(echo -n "$VMESS_JSON" | base64 -w 0 2>/dev/null || echo -n "$VMESS_JSON" | base64)
         SHARE_LINK="vmess://${VMESS_BASE64}"
     else
-        # Shadowsocks 2022 链接格式: ss://method:password@server:port#remark
+        # Shadowsocks 2022 链接格式
         SS_USERINFO=$(echo -n "2022-blake3-aes-128-gcm:${USER_UUID}" | base64 -w 0 2>/dev/null || echo -n "2022-blake3-aes-128-gcm:${USER_UUID}" | base64)
         SHARE_LINK="ss://${SS_USERINFO}@${SERVER_ADDR}:${XRAY_PORT}#${REMARK_ENCODED}"
     fi
@@ -613,10 +674,83 @@ case "$1" in
     echo "=============================="
     echo ""
     ;;
-  *) 
+  menu|"")
+    # 交互式菜单
+    while true; do
+      clear
+      echo ""
+      echo "  ╔═══════════════════════════════════════╗"
+      echo "  ║       Xray + Tor 管理面板             ║"
+      echo "  ╠═══════════════════════════════════════╣"
+      echo "  ║  1. 查看服务状态                      ║"
+      echo "  ║  2. 启动服务                          ║"
+      echo "  ║  3. 停止服务                          ║"
+      echo "  ║  4. 重启服务                          ║"
+      echo "  ║  5. 查看连接信息                      ║"
+      echo "  ║  6. 显示分享链接                      ║"
+      echo "  ║  7. 测试 Tor 连接                     ║"
+      echo "  ║  8. 切换路由模式                      ║"
+      echo "  ║  9. 查看日志                          ║"
+      echo "  ║  0. 卸载                              ║"
+      echo "  ║  q. 退出菜单                          ║"
+      echo "  ╚═══════════════════════════════════════╝"
+      echo ""
+      echo -n "  请选择 [0-9/q]: "
+      read choice
+      case $choice in
+        1) echo ""; systemctl status xray tor --no-pager; echo ""; read -p "按回车继续..." ;;
+        2) systemctl start tor && sleep 3 && systemctl start xray && echo "已启动"; read -p "按回车继续..." ;;
+        3) systemctl stop xray tor && echo "已停止"; read -p "按回车继续..." ;;
+        4) systemctl restart tor && sleep 3 && systemctl restart xray && echo "已重启"; read -p "按回车继续..." ;;
+        5) echo ""; cat /usr/local/etc/xray/info.txt 2>/dev/null; echo ""; read -p "按回车继续..." ;;
+        6) echo ""; echo "分享链接:"; cat /usr/local/etc/xray/share.txt 2>/dev/null; echo ""; read -p "按回车继续..." ;;
+        7) 
+          echo "测试 Tor 连接..."
+          timeout 30 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip | jq . 2>/dev/null || echo "连接失败或超时"
+          read -p "按回车继续..."
+          ;;
+        8)
+          echo "1) 智能分流 (.onion走Tor)"
+          echo "2) 全流量走Tor"
+          read -p "选择: " m
+          CFG="/usr/local/etc/xray/config.json"
+          if [ "$m" = "2" ]; then
+            jq '.routing.rules=[{"type":"field","network":"tcp,udp","outboundTag":"tor-out"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
+            echo "已切换到: 全流量Tor"
+          else
+            jq '.routing.rules=[{"type":"field","domain":["regexp:\\.onion$"],"outboundTag":"tor-out"},{"type":"field","network":"tcp,udp","outboundTag":"direct"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
+            echo "已切换到: 智能分流"
+          fi
+          systemctl restart xray
+          read -p "按回车继续..."
+          ;;
+        9) echo ""; journalctl -u xray -n 30 --no-pager; echo ""; read -p "按回车继续..." ;;
+        0)
+          echo "确认卸载? [y/N]"
+          read confirm
+          if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+            systemctl stop xray tor 2>/dev/null
+            systemctl disable xray tor 2>/dev/null
+            rm -rf /usr/local/xray-tor /usr/local/etc/xray /var/log/xray
+            rm -f /etc/systemd/system/xray.service /etc/systemd/system/tor.service
+            rm -f /usr/local/bin/xray /usr/local/bin/tor /usr/local/bin/xray-tor /usr/local/bin/xt
+            systemctl daemon-reload
+            echo "已卸载"
+            exit 0
+          fi
+          ;;
+        q|Q) echo "再见!"; exit 0 ;;
+        *) echo "无效选择" ;;
+      esac
+    done
+    ;;
+  help|-h|--help)
     echo "Xray + Tor 管理工具"
     echo ""
-    echo "用法: xray-tor <命令>"
+    echo "用法: xray-tor [命令]"
+    echo "      xt [命令]        (快捷方式)"
+    echo ""
+    echo "无参数时进入交互式菜单"
     echo ""
     echo "命令:"
     echo "  status    - 查看服务状态"
@@ -626,32 +760,41 @@ case "$1" in
     echo "  info      - 查看连接信息"
     echo "  share     - 显示分享链接"
     echo "  test      - 测试 Tor 连接"
-    echo "  test-onion- 测试 .onion 访问"
     echo "  switch    - 切换路由模式"
     echo "  log       - 查看 Xray 日志"
     echo "  tor-log   - 查看 Tor 日志"
+    echo "  menu      - 进入交互式菜单"
     echo "  uninstall - 卸载"
+    ;;
+  *)
+    echo "未知命令: $1"
+    echo "使用 'xray-tor help' 查看帮助"
     ;;
 esac
 MANAGER
     chmod +x /usr/local/bin/xray-tor
-    log_info "管理命令: xray-tor"
+    
+    # 创建快捷方式 xt
+    ln -sf /usr/local/bin/xray-tor /usr/local/bin/xt
+    
+    log_info "管理命令: xray-tor 或 xt"
 }
 
 show_completion() {
     echo ""
-    echo -e "${CYAN}============================================${NC}"
-    echo -e "${CYAN}        安装完成!${NC}"
-    echo -e "${CYAN}============================================${NC}"
+    echo -e "${CYAN}╔═══════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║              安装完成!                            ║${NC}"
+    echo -e "${CYAN}╚═══════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "${GREEN}管理命令:${NC}"
-    echo "  xray-tor status   - 查看状态"
-    echo "  xray-tor restart  - 重启服务"
-    echo "  xray-tor info     - 查看连接信息"
-    echo "  xray-tor test     - 测试 Tor 连接"
-    echo "  xray-tor switch   - 切换路由模式"
-    echo "  xray-tor log      - 查看 Xray 日志"
-    echo "  xray-tor uninstall- 卸载"
+    echo -e "${GREEN}进入管理菜单:${NC}"
+    echo -e "  ${YELLOW}xray-tor${NC}  或  ${YELLOW}xt${NC}"
+    echo ""
+    echo -e "${GREEN}常用命令:${NC}"
+    echo "  xt info     - 查看连接信息"
+    echo "  xt share    - 显示分享链接"
+    echo "  xt status   - 查看服务状态"
+    echo "  xt restart  - 重启服务"
+    echo "  xt test     - 测试 Tor 连接"
     echo ""
     cat "$XRAY_CONFIG_DIR/info.txt"
     echo ""
