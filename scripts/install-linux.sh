@@ -436,10 +436,26 @@ configure_xray() {
         # 生成 x25519 密钥对
         log_info "生成 Reality 密钥..."
         
-        # 使用与标准脚本相同的方法
+        # 生成私钥
         KEYS=$("$BIN_DIR/xray" x25519 2>&1)
-        PRIVATE_KEY=$(echo "$KEYS" | awk '/Private/ {print $3}')
-        PUBLIC_KEY=$(echo "$KEYS" | awk '/Public/ {print $3}')
+        
+        # 新版 Xray 输出格式: PrivateKey: xxx (注意没有空格)
+        PRIVATE_KEY=$(echo "$KEYS" | awk '/PrivateKey/ {print $2}')
+        
+        # 如果上面失败，尝试旧格式
+        if [ -z "$PRIVATE_KEY" ]; then
+            PRIVATE_KEY=$(echo "$KEYS" | awk '/Private/ {print $3}')
+        fi
+        
+        # 用私钥生成公钥 (新版 Xray 必须这样做)
+        if [ -n "$PRIVATE_KEY" ]; then
+            PUB_OUTPUT=$("$BIN_DIR/xray" x25519 -i "$PRIVATE_KEY" 2>&1)
+            PUBLIC_KEY=$(echo "$PUB_OUTPUT" | awk '/PublicKey/ {print $2}')
+            # 如果上面失败，尝试旧格式
+            if [ -z "$PUBLIC_KEY" ]; then
+                PUBLIC_KEY=$(echo "$PUB_OUTPUT" | awk '/Public/ {print $3}')
+            fi
+        fi
         
         # 验证密钥
         if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
