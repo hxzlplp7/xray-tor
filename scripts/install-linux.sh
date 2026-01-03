@@ -425,12 +425,20 @@ Tor SOCKS: 127.0.0.1:$TOR_SOCKS_PORT
 EOF
     
     # 生成分享链接
-    REMARK="Xray-Tor-${SERVER_IP}"
+    # 处理 IPv6 地址格式
+    if echo "$SERVER_IP" | grep -q ":"; then
+        # IPv6 地址需要方括号
+        SERVER_ADDR="[${SERVER_IP}]"
+        REMARK="Xray-Tor"
+    else
+        SERVER_ADDR="${SERVER_IP}"
+        REMARK="Xray-Tor-${SERVER_IP}"
+    fi
     REMARK_ENCODED=$(echo -n "$REMARK" | sed 's/ /%20/g; s/:/%3A/g; s/\//%2F/g')
     
     if [ "$PROTO" = "1" ]; then
         # VLESS 链接格式: vless://uuid@server:port?type=tcp&security=none#remark
-        SHARE_LINK="vless://${USER_UUID}@${SERVER_IP}:${XRAY_PORT}?type=tcp&security=none#${REMARK_ENCODED}"
+        SHARE_LINK="vless://${USER_UUID}@${SERVER_ADDR}:${XRAY_PORT}?type=tcp&security=none#${REMARK_ENCODED}"
     elif [ "$PROTO" = "2" ]; then
         # VMess 链接格式: vmess://base64(json)
         VMESS_JSON="{\"v\":\"2\",\"ps\":\"${REMARK}\",\"add\":\"${SERVER_IP}\",\"port\":\"${XRAY_PORT}\",\"id\":\"${USER_UUID}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"\",\"path\":\"/xray\",\"tls\":\"\"}"
@@ -439,7 +447,7 @@ EOF
     else
         # Shadowsocks 2022 链接格式: ss://method:password@server:port#remark
         SS_USERINFO=$(echo -n "2022-blake3-aes-128-gcm:${USER_UUID}" | base64 -w 0 2>/dev/null || echo -n "2022-blake3-aes-128-gcm:${USER_UUID}" | base64)
-        SHARE_LINK="ss://${SS_USERINFO}@${SERVER_IP}:${XRAY_PORT}#${REMARK_ENCODED}"
+        SHARE_LINK="ss://${SS_USERINFO}@${SERVER_ADDR}:${XRAY_PORT}#${REMARK_ENCODED}"
     fi
     
     # 保存分享链接
@@ -538,11 +546,38 @@ case "$1" in
   info) cat /usr/local/etc/xray/info.txt 2>/dev/null ;;
   test) 
     echo "测试 Tor 连接..."
-    curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip | jq . || echo "连接失败"
+    echo ""
+    # 先检查 Tor 服务状态
+    if ! systemctl is-active --quiet tor; then
+      echo "[错误] Tor 服务未运行，尝试启动..."
+      systemctl start tor
+      sleep 5
+    fi
+    echo "检查 Tor 电路..."
+    # 使用超时防止挂起
+    RESULT=$(timeout 30 curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip 2>&1)
+    if [ -n "$RESULT" ]; then
+      echo "$RESULT" | jq . 2>/dev/null || echo "$RESULT"
+      echo ""
+      echo "[成功] Tor 连接正常!"
+    else
+      echo "[失败] Tor 连接超时或失败"
+      echo ""
+      echo "调试信息:"
+      systemctl status tor --no-pager | head -10
+    fi
     ;;
   test-onion)
     echo "测试 .onion 访问..."
-    curl -s --socks5-hostname 127.0.0.1:9050 http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ | head -20
+    echo ""
+    RESULT=$(timeout 60 curl -s --socks5-hostname 127.0.0.1:9050 http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ 2>&1 | head -20)
+    if [ -n "$RESULT" ]; then
+      echo "$RESULT"
+      echo ""
+      echo "[成功] .onion 访问正常!"
+    else
+      echo "[失败] .onion 访问超时"
+    fi
     ;;
   switch)
     CFG="/usr/local/etc/xray/config.json"
