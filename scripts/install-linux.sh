@@ -492,7 +492,7 @@ configure_xray() {
         RULES='[{"type":"field","network":"tcp,udp","outboundTag":"tor-out"}]'
         MODE_NAME="全流量Tor"
     else
-        RULES='[{"type":"field","domain":["regexp:\\.onion$"],"outboundTag":"tor-out"},{"type":"field","network":"tcp,udp","outboundTag":"direct"}]'
+        RULES='[{"type":"field","domain":["domain:.onion"],"outboundTag":"tor-out"},{"type":"field","network":"tcp,udp","outboundTag":"direct"}]'
         MODE_NAME="智能分流"
     fi
     
@@ -508,7 +508,7 @@ configure_xray() {
     {"tag":"block","protocol":"blackhole"}
   ],
   "routing":{"domainStrategy":"AsIs","rules":$RULES},
-  "dns":{"servers":[{"address":"127.0.0.1","port":$TOR_DNS_PORT,"domains":["regexp:\\.onion$"]},"8.8.8.8"]}
+  "dns":{"servers":[{"address":"127.0.0.1","port":$TOR_DNS_PORT,"domains":["domain:.onion"]},"8.8.8.8"]}
 }
 EOF
 
@@ -705,7 +705,7 @@ case "$1" in
       jq '.routing.rules=[{"type":"field","network":"tcp,udp","outboundTag":"tor-out"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
       echo "已切换到: 全流量Tor"
     else
-      jq '.routing.rules=[{"type":"field","domain":["regexp:\\.onion$"],"outboundTag":"tor-out"},{"type":"field","network":"tcp,udp","outboundTag":"direct"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
+      jq '.routing.rules=[{"type":"field","domain":["domain:.onion"],"outboundTag":"tor-out"},{"type":"field","network":"tcp,udp","outboundTag":"direct"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
       echo "已切换到: 智能分流"
     fi
     systemctl restart xray && echo "Xray 已重启"
@@ -773,7 +773,7 @@ case "$1" in
             jq '.routing.rules=[{"type":"field","network":"tcp,udp","outboundTag":"tor-out"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
             echo "已切换到: 全流量Tor"
           else
-            jq '.routing.rules=[{"type":"field","domain":["regexp:\\.onion$"],"outboundTag":"tor-out"},{"type":"field","network":"tcp,udp","outboundTag":"direct"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
+            jq '.routing.rules=[{"type":"field","domain":["domain:.onion"],"outboundTag":"tor-out"},{"type":"field","network":"tcp,udp","outboundTag":"direct"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
             echo "已切换到: 智能分流"
           fi
           systemctl restart xray
