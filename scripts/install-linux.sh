@@ -203,9 +203,35 @@ download_xray() {
 }
 
 download_tor() {
-    log_step "下载 Tor..."
+    log_step "安装 Tor..."
     
-    # Tor Expert Bundle 版本
+    # 优先使用包管理器（更稳定）
+    log_info "尝试从包管理器安装 Tor..."
+    case $OS in
+        ubuntu|debian)
+            apt-get update -y 2>/dev/null
+            apt-get install -y tor 2>/dev/null
+            ;;
+        centos|rhel|fedora|rocky)
+            dnf install -y epel-release 2>/dev/null || yum install -y epel-release 2>/dev/null || true
+            dnf install -y tor 2>/dev/null || yum install -y tor 2>/dev/null
+            ;;
+        arch)
+            pacman -Sy --noconfirm tor 2>/dev/null
+            ;;
+    esac
+    
+    # 检查是否安装成功
+    if command -v tor &>/dev/null; then
+        log_info "Tor 从包管理器安装成功"
+        # 使用系统 tor
+        TOR_USE_SYSTEM=1
+        return
+    fi
+    
+    # 包管理器失败，尝试 Expert Bundle
+    log_warn "包管理器安装失败，尝试 Expert Bundle..."
+    
     TOR_VERSION="14.0.4"
     TOR_URL="https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-${TOR_ARCH}-${TOR_VERSION}.tar.gz"
     
@@ -427,8 +453,8 @@ configure_xray() {
         SHORT_ID=$(head -c 8 /dev/urandom | xxd -p)
         
         # Reality 目标站点（伪装）
-        REALITY_DEST="www.microsoft.com:443"
-        REALITY_SNI="www.microsoft.com"
+        REALITY_DEST="www.apple.com:443"
+        REALITY_SNI="www.apple.com"
         
         INBOUND='{
   "port": '$XRAY_PORT',
@@ -442,7 +468,7 @@ configure_xray() {
     "security": "reality",
     "realitySettings": {
       "dest": "'$REALITY_DEST'",
-      "serverNames": ["'$REALITY_SNI'", "microsoft.com"],
+      "serverNames": ["'$REALITY_SNI'", "apple.com"],
       "privateKey": "'$PRIVATE_KEY'",
       "shortIds": ["'$SHORT_ID'", ""]
     }
@@ -552,8 +578,12 @@ EOF
 create_systemd_services() {
     log_step "创建 systemd 服务..."
     
-    # Tor 服务 (添加 LD_LIBRARY_PATH 以加载依赖库)
-    cat > /etc/systemd/system/tor.service << EOF
+    # 如果使用系统 Tor，不需要创建自定义服务
+    if [ "$TOR_USE_SYSTEM" = "1" ]; then
+        log_info "使用系统自带的 Tor 服务"
+    else
+        # 自定义 Tor 服务 (添加 LD_LIBRARY_PATH 以加载依赖库)
+        cat > /etc/systemd/system/tor.service << EOF
 [Unit]
 Description=Tor Anonymity Network
 After=network.target
@@ -570,6 +600,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+    fi
 
     # Xray 服务
     cat > /etc/systemd/system/xray.service << EOF
