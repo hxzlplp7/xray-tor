@@ -435,15 +435,35 @@ configure_xray() {
         
         # 生成 x25519 密钥对
         log_info "生成 Reality 密钥..."
-        KEYS=$("$BIN_DIR/xray" x25519 2>&1)
-        # 解析密钥 (格式: Private key: xxx / Public key: xxx)
-        PRIVATE_KEY=$(echo "$KEYS" | grep -i "private" | awk -F': ' '{print $2}' | tr -d ' ')
-        PUBLIC_KEY=$(echo "$KEYS" | grep -i "public" | awk -F': ' '{print $2}' | tr -d ' ')
         
-        # 备用解析方式
+        # 方法1: 直接生成密钥对
+        KEYS=$("$BIN_DIR/xray" x25519 2>&1)
+        echo "DEBUG: xray x25519 输出: $KEYS"
+        
+        # 解析私钥 (格式可能是: "Private key: xxx" 或直接输出两行)
+        PRIVATE_KEY=$(echo "$KEYS" | grep -i "private" | sed 's/.*: *//' | tr -d ' \r\n')
+        
+        # 如果上面的方法失败，尝试其他方式
         if [ -z "$PRIVATE_KEY" ]; then
-            PRIVATE_KEY=$(echo "$KEYS" | head -1 | awk '{print $NF}')
-            PUBLIC_KEY=$(echo "$KEYS" | tail -1 | awk '{print $NF}')
+            # 可能是两行直接输出格式
+            PRIVATE_KEY=$(echo "$KEYS" | head -1 | awk '{print $NF}' | tr -d ' \r\n')
+        fi
+        
+        # 使用私钥生成公钥 (这是最可靠的方式)
+        if [ -n "$PRIVATE_KEY" ]; then
+            PUBLIC_KEY=$("$BIN_DIR/xray" x25519 -i "$PRIVATE_KEY" 2>&1 | grep -i "public" | sed 's/.*: *//' | tr -d ' \r\n')
+            
+            # 如果上面方法失败，尝试直接取输出
+            if [ -z "$PUBLIC_KEY" ]; then
+                PUBLIC_KEY=$("$BIN_DIR/xray" x25519 -i "$PRIVATE_KEY" 2>&1 | tail -1 | awk '{print $NF}' | tr -d ' \r\n')
+            fi
+        fi
+        
+        # 验证密钥
+        if [ -z "$PRIVATE_KEY" ] || [ -z "$PUBLIC_KEY" ]; then
+            log_error "密钥生成失败，请检查 Xray 版本"
+            log_info "尝试手动生成: $BIN_DIR/xray x25519"
+            exit 1
         fi
         
         log_info "Private Key: ${PRIVATE_KEY:0:10}..."
