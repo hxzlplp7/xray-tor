@@ -3,6 +3,7 @@
 # Xray + Tor 一键安装脚本 (Linux VPS 版)
 # 支持: Debian/Ubuntu, CentOS/RHEL/Fedora, Arch Linux
 # 功能: 普通网站走Xray, 暗网走Tor, 或全流量走Tor
+# 特点: 直接下载二进制文件，无需包管理器
 # ============================================================
 
 set -e
@@ -17,13 +18,17 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 # 配置变量
+INSTALL_DIR="/usr/local/xray-tor"
+BIN_DIR="$INSTALL_DIR/bin"
+CONFIG_DIR="$INSTALL_DIR/config"
+LOG_DIR="$INSTALL_DIR/logs"
+TOR_DATA_DIR="$INSTALL_DIR/tor-data"
 XRAY_CONFIG_DIR="/usr/local/etc/xray"
 XRAY_LOG_DIR="/var/log/xray"
 TOR_CONFIG_DIR="/etc/tor"
-XRAY_BIN="/usr/local/bin/xray"
-MANAGEMENT_SCRIPT="/usr/local/bin/xray-tor"
 DEFAULT_XRAY_PORT=10086
-DEFAULT_TOR_SOCKS_PORT=9050
+TOR_SOCKS_PORT=9050
+TOR_DNS_PORT=5353
 
 # 日志函数
 log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -53,49 +58,208 @@ detect_os() {
 detect_arch() {
     ARCH=$(uname -m)
     case $ARCH in
-        x86_64) XRAY_ARCH="64" ;;
-        aarch64) XRAY_ARCH="arm64-v8a" ;;
-        *) log_error "不支持: $ARCH"; exit 1 ;;
+        x86_64|amd64)
+            XRAY_ARCH="64"
+            TOR_ARCH="linux-x86_64"
+            ;;
+        aarch64|arm64)
+            XRAY_ARCH="arm64-v8a"
+            TOR_ARCH="linux-aarch64"
+            ;;
+        armv7l)
+            XRAY_ARCH="arm32-v7a"
+            TOR_ARCH="linux-armhf"
+            ;;
+        *)
+            log_error "不支持: $ARCH"
+            exit 1
+            ;;
     esac
+    log_info "架构: $ARCH -> Xray: $XRAY_ARCH, Tor: $TOR_ARCH"
+}
+
+create_directories() {
+    log_step "创建目录结构..."
+    mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$LOG_DIR" "$TOR_DATA_DIR"
+    mkdir -p "$XRAY_CONFIG_DIR" "$XRAY_LOG_DIR" /var/log/tor
+    chmod 700 "$TOR_DATA_DIR"
 }
 
 install_dependencies() {
-    log_step "安装依赖..."
+    log_step "检查基础依赖..."
+    
+    # 只安装必要的工具
+    if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
+        log_info "安装 curl/wget..."
+        case $OS in
+            ubuntu|debian) apt-get update -y && apt-get install -y curl ;;
+            centos|rhel|fedora|rocky) dnf install -y curl 2>/dev/null || yum install -y curl ;;
+            arch) pacman -Sy --noconfirm curl ;;
+        esac
+    fi
+    
+    if ! command -v unzip &>/dev/null; then
+        log_info "安装 unzip..."
+        case $OS in
+            ubuntu|debian) apt-get install -y unzip ;;
+            centos|rhel|fedora|rocky) dnf install -y unzip 2>/dev/null || yum install -y unzip ;;
+            arch) pacman -Sy --noconfirm unzip ;;
+        esac
+    fi
+    
+    if ! command -v jq &>/dev/null; then
+        log_info "安装 jq..."
+        case $OS in
+            ubuntu|debian) apt-get install -y jq ;;
+            centos|rhel|fedora|rocky) dnf install -y jq 2>/dev/null || yum install -y jq ;;
+            arch) pacman -Sy --noconfirm jq ;;
+        esac
+    fi
+}
+
+download_xray() {
+    log_step "下载 Xray..."
+    
+    # 获取最新版本
+    XRAY_VERSION=$(curl -sL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | sed 's/.*"v\([^"]*\)".*/\1/' || echo "25.1.1")
+    
+    XRAY_URL="https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-${XRAY_ARCH}.zip"
+    
+    log_info "下载 Xray v${XRAY_VERSION} from $XRAY_URL"
+    
+    cd /tmp
+    rm -f Xray-linux-*.zip xray geoip.dat geosite.dat
+    
+    if command -v curl &>/dev/null; then
+        curl -L -o xray.zip "$XRAY_URL" || { log_error "Xray 下载失败"; exit 1; }
+    else
+        wget -O xray.zip "$XRAY_URL" || { log_error "Xray 下载失败"; exit 1; }
+    fi
+    
+    unzip -o xray.zip xray geoip.dat geosite.dat
+    mv xray "$BIN_DIR/"
+    mv geoip.dat geosite.dat "$CONFIG_DIR/" 2>/dev/null || true
+    chmod +x "$BIN_DIR/xray"
+    rm -f xray.zip
+    
+    # 创建软链接
+    ln -sf "$BIN_DIR/xray" /usr/local/bin/xray
+    
+    log_info "Xray v${XRAY_VERSION} 安装完成"
+}
+
+download_tor() {
+    log_step "下载 Tor..."
+    
+    # Tor Expert Bundle 版本
+    TOR_VERSION="14.0.4"
+    TOR_URL="https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_VERSION}/tor-expert-bundle-${TOR_ARCH}-${TOR_VERSION}.tar.gz"
+    
+    log_info "下载 Tor Expert Bundle v${TOR_VERSION}..."
+    
+    cd /tmp
+    rm -rf tor-expert-bundle* tor
+    
+    if command -v curl &>/dev/null; then
+        curl -L -o tor-bundle.tar.gz "$TOR_URL" || {
+            log_warn "官方源下载失败，尝试备用源..."
+            # 备用: 使用系统包管理器
+            install_tor_from_package
+            return
+        }
+    else
+        wget -O tor-bundle.tar.gz "$TOR_URL" || {
+            log_warn "官方源下载失败，尝试备用源..."
+            install_tor_from_package
+            return
+        }
+    fi
+    
+    tar -xzf tor-bundle.tar.gz
+    
+    # Expert Bundle 结构: tor/tor, tor/pluggable_transports/, tor/data/
+    if [ -f "tor/tor" ]; then
+        mv tor/tor "$BIN_DIR/"
+        chmod +x "$BIN_DIR/tor"
+        # 复制 pluggable transports (如果有)
+        if [ -d "tor/pluggable_transports" ]; then
+            cp -r tor/pluggable_transports "$INSTALL_DIR/"
+        fi
+    else
+        log_error "Tor 解压失败"
+        install_tor_from_package
+        return
+    fi
+    
+    rm -rf tor-bundle.tar.gz tor
+    
+    # 创建软链接
+    ln -sf "$BIN_DIR/tor" /usr/local/bin/tor
+    
+    log_info "Tor v${TOR_VERSION} 安装完成"
+}
+
+install_tor_from_package() {
+    log_warn "尝试从包管理器安装 Tor..."
     case $OS in
         ubuntu|debian)
             apt-get update -y
-            apt-get --fix-broken install -y 2>/dev/null || true
-            apt-get install -y curl wget unzip jq tor
+            apt-get install -y tor
             ;;
         centos|rhel|fedora|rocky)
             dnf install -y epel-release 2>/dev/null || yum install -y epel-release || true
-            dnf install -y curl wget unzip jq tor 2>/dev/null || yum install -y curl wget unzip jq tor
+            dnf install -y tor 2>/dev/null || yum install -y tor
             ;;
-        arch) pacman -Sy --noconfirm curl wget unzip jq tor ;;
+        arch)
+            pacman -Sy --noconfirm tor
+            ;;
     esac
-}
-
-install_xray() {
-    log_step "安装 Xray..."
-    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-    mkdir -p "$XRAY_CONFIG_DIR" "$XRAY_LOG_DIR"
+    
+    if command -v tor &>/dev/null; then
+        log_info "Tor 从包管理器安装成功"
+    else
+        log_error "Tor 安装失败"
+        exit 1
+    fi
 }
 
 configure_tor() {
     log_step "配置 Tor..."
-    cat > "$TOR_CONFIG_DIR/torrc" << 'EOF'
-SocksPort 127.0.0.1:9050
-DNSPort 127.0.0.1:5353
+    
+    # 检测 tor 用户
+    TOR_USER="tor"
+    if id "debian-tor" &>/dev/null; then
+        TOR_USER="debian-tor"
+    elif id "tor" &>/dev/null; then
+        TOR_USER="tor"
+    else
+        # 创建 tor 用户
+        useradd -r -s /bin/false tor 2>/dev/null || true
+        TOR_USER="tor"
+    fi
+    
+    mkdir -p /etc/tor /var/log/tor "$TOR_DATA_DIR"
+    
+    cat > /etc/tor/torrc << EOF
+# Tor 配置
+SocksPort 127.0.0.1:${TOR_SOCKS_PORT}
+DNSPort 127.0.0.1:${TOR_DNS_PORT}
+DataDirectory ${TOR_DATA_DIR}
+Log notice file /var/log/tor/notices.log
 AutomapHostsOnResolve 1
 AutomapHostsSuffixes .onion
-Log notice file /var/log/tor/notices.log
 EOF
-    mkdir -p /var/log/tor
-    chown -R tor:tor /var/log/tor 2>/dev/null || chown -R debian-tor:debian-tor /var/log/tor 2>/dev/null || true
+    
+    chown -R $TOR_USER:$TOR_USER "$TOR_DATA_DIR" /var/log/tor 2>/dev/null || true
+    chmod 700 "$TOR_DATA_DIR"
+    
+    log_info "Tor 配置完成"
 }
 
 generate_uuid() {
-    cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen 2>/dev/null || head -c 32 /dev/urandom | xxd -p | sed 's/\(..\{8\}\)\(..\{4\}\)\(..\{4\}\)\(..\{4\}\)\(..\)/\1-\2-\3-\4-\5/'
+    cat /proc/sys/kernel/random/uuid 2>/dev/null || \
+    uuidgen 2>/dev/null || \
+    head -c 32 /dev/urandom | xxd -p | sed 's/\(..\{8\}\)\(..\{4\}\)\(..\{4\}\)\(..\{4\}\)\(..*\)/\1-\2-\3-\4-\5/'
 }
 
 configure_xray() {
@@ -113,7 +277,7 @@ configure_xray() {
     MODE=${MODE:-1}
     
     USER_UUID=$(generate_uuid)
-    SERVER_IP=$(curl -s ifconfig.me || echo "YOUR_IP")
+    SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s ip.sb 2>/dev/null || echo "YOUR_IP")
     
     # 生成配置
     if [ "$PROTO" = "1" ]; then
@@ -137,64 +301,179 @@ configure_xray() {
         MODE_NAME="智能分流"
     fi
     
+    mkdir -p "$XRAY_CONFIG_DIR"
+    
     cat > "$XRAY_CONFIG_DIR/config.json" << EOF
 {
-  "log":{"loglevel":"warning"},
+  "log":{"loglevel":"warning","access":"$XRAY_LOG_DIR/access.log","error":"$XRAY_LOG_DIR/error.log"},
   "inbounds":[$INBOUND],
   "outbounds":[
     {"tag":"direct","protocol":"freedom"},
-    {"tag":"tor-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":9050}]}},
+    {"tag":"tor-out","protocol":"socks","settings":{"servers":[{"address":"127.0.0.1","port":$TOR_SOCKS_PORT}]}},
     {"tag":"block","protocol":"blackhole"}
   ],
   "routing":{"domainStrategy":"AsIs","rules":$RULES},
-  "dns":{"servers":[{"address":"127.0.0.1","port":5353,"domains":["regexp:\\.onion$"]},"8.8.8.8"]}
+  "dns":{"servers":[{"address":"127.0.0.1","port":$TOR_DNS_PORT,"domains":["regexp:\\.onion$"]},"8.8.8.8"]}
 }
 EOF
 
     # 保存连接信息
     cat > "$XRAY_CONFIG_DIR/info.txt" << EOF
-协议: $PROTO_NAME | 服务器: $SERVER_IP | 端口: $XRAY_PORT | UUID/密码: $USER_UUID | 模式: $MODE_NAME
+===== Xray + Tor 连接信息 =====
+协议: $PROTO_NAME
+服务器: $SERVER_IP
+端口: $XRAY_PORT
+UUID/密码: $USER_UUID
+路由模式: $MODE_NAME
+Tor SOCKS: 127.0.0.1:$TOR_SOCKS_PORT
+==============================
 EOF
-    echo -e "${GREEN}配置完成! 信息保存在 $XRAY_CONFIG_DIR/info.txt${NC}"
+    
+    echo -e "${GREEN}配置完成!${NC}"
     cat "$XRAY_CONFIG_DIR/info.txt"
+}
+
+create_systemd_services() {
+    log_step "创建 systemd 服务..."
+    
+    # Tor 服务
+    cat > /etc/systemd/system/tor.service << EOF
+[Unit]
+Description=Tor Anonymity Network
+After=network.target
+
+[Service]
+Type=simple
+User=tor
+ExecStart=$BIN_DIR/tor -f /etc/tor/torrc
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Xray 服务
+    cat > /etc/systemd/system/xray.service << EOF
+[Unit]
+Description=Xray Service
+After=network.target tor.service
+Wants=tor.service
+
+[Service]
+Type=simple
+ExecStart=$BIN_DIR/xray run -config $XRAY_CONFIG_DIR/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # 如果系统已有 tor 包安装的服务，使用系统的
+    if systemctl list-unit-files | grep -q "^tor.service" && [ -f "/usr/bin/tor" ]; then
+        log_info "使用系统自带的 Tor 服务"
+        rm -f /etc/systemd/system/tor.service
+    fi
+    
+    systemctl daemon-reload
+    log_info "systemd 服务创建完成"
 }
 
 setup_services() {
     log_step "启动服务..."
+    
     systemctl daemon-reload
     systemctl enable tor xray
-    systemctl restart tor && sleep 3 && systemctl restart xray
+    
+    # 先启动 Tor
+    systemctl restart tor
+    log_info "等待 Tor 初始化..."
+    sleep 5
+    
+    # 再启动 Xray
+    systemctl restart xray
+    sleep 2
+    
     echo -e "${GREEN}Xray: $(systemctl is-active xray) | Tor: $(systemctl is-active tor)${NC}"
 }
 
 create_manager() {
-    cat > "$MANAGEMENT_SCRIPT" << 'MANAGER'
+    log_step "创建管理命令..."
+    
+    cat > /usr/local/bin/xray-tor << 'MANAGER'
 #!/bin/bash
 case "$1" in
   status) systemctl status xray tor --no-pager ;;
-  restart) systemctl restart tor && sleep 2 && systemctl restart xray && echo "已重启" ;;
+  restart) systemctl restart tor && sleep 3 && systemctl restart xray && echo "已重启" ;;
   stop) systemctl stop xray tor && echo "已停止" ;;
-  start) systemctl start tor && sleep 2 && systemctl start xray && echo "已启动" ;;
+  start) systemctl start tor && sleep 3 && systemctl start xray && echo "已启动" ;;
   log) journalctl -u xray -n 50 --no-pager ;;
   tor-log) tail -50 /var/log/tor/notices.log 2>/dev/null || journalctl -u tor -n 50 ;;
   info) cat /usr/local/etc/xray/info.txt 2>/dev/null ;;
-  test) curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip | jq . ;;
+  test) 
+    echo "测试 Tor 连接..."
+    curl -s --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip | jq . || echo "连接失败"
+    ;;
+  test-onion)
+    echo "测试 .onion 访问..."
+    curl -s --socks5-hostname 127.0.0.1:9050 http://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion/ | head -20
+    ;;
   switch)
     CFG="/usr/local/etc/xray/config.json"
-    echo "1) 智能分流  2) 全Tor"
+    echo "当前模式切换:"
+    echo "1) 智能分流 (.onion走Tor)"
+    echo "2) 全流量走Tor"
     read -p "选择: " m
     if [ "$m" = "2" ]; then
       jq '.routing.rules=[{"type":"field","network":"tcp,udp","outboundTag":"tor-out"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
+      echo "已切换到: 全流量Tor"
     else
       jq '.routing.rules=[{"type":"field","domain":["regexp:\\.onion$"],"outboundTag":"tor-out"},{"type":"field","network":"tcp,udp","outboundTag":"direct"}]' "$CFG" > /tmp/x.json && mv /tmp/x.json "$CFG"
+      echo "已切换到: 智能分流"
     fi
-    systemctl restart xray && echo "已切换"
+    systemctl restart xray && echo "Xray 已重启"
     ;;
-  *) echo "用法: xray-tor {status|restart|stop|start|log|tor-log|info|test|switch}" ;;
+  uninstall)
+    echo "确认卸载 Xray + Tor? [y/N]"
+    read confirm
+    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+      systemctl stop xray tor 2>/dev/null
+      systemctl disable xray tor 2>/dev/null
+      rm -rf /usr/local/xray-tor /usr/local/etc/xray /var/log/xray
+      rm -f /etc/systemd/system/xray.service /usr/local/bin/xray /usr/local/bin/tor /usr/local/bin/xray-tor
+      systemctl daemon-reload
+      echo "已卸载"
+    fi
+    ;;
+  *) 
+    echo "Xray + Tor 管理工具"
+    echo "用法: xray-tor {status|restart|stop|start|log|tor-log|info|test|test-onion|switch|uninstall}" 
+    ;;
 esac
 MANAGER
-    chmod +x "$MANAGEMENT_SCRIPT"
+    chmod +x /usr/local/bin/xray-tor
     log_info "管理命令: xray-tor"
+}
+
+show_completion() {
+    echo ""
+    echo -e "${CYAN}============================================${NC}"
+    echo -e "${CYAN}        安装完成!${NC}"
+    echo -e "${CYAN}============================================${NC}"
+    echo ""
+    echo -e "${GREEN}管理命令:${NC}"
+    echo "  xray-tor status   - 查看状态"
+    echo "  xray-tor restart  - 重启服务"
+    echo "  xray-tor info     - 查看连接信息"
+    echo "  xray-tor test     - 测试 Tor 连接"
+    echo "  xray-tor switch   - 切换路由模式"
+    echo "  xray-tor log      - 查看 Xray 日志"
+    echo "  xray-tor uninstall- 卸载"
+    echo ""
+    cat "$XRAY_CONFIG_DIR/info.txt"
+    echo ""
 }
 
 main() {
@@ -202,13 +481,16 @@ main() {
     check_root
     detect_os
     detect_arch
+    create_directories
     install_dependencies
-    install_xray
+    download_xray
+    download_tor
     configure_tor
     configure_xray
+    create_systemd_services
     setup_services
     create_manager
-    echo -e "${GREEN}安装完成! 使用 'xray-tor' 管理服务${NC}"
+    show_completion
 }
 
 main "$@"
