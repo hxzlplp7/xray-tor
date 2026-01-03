@@ -279,12 +279,25 @@ download_tor() {
         if [ -d "tor/pluggable_transports" ]; then
             cp -r tor/pluggable_transports "$INSTALL_DIR/"
         fi
-        # 复制依赖库 (如果有)
-        if ls tor/*.so* 1>/dev/null 2>&1; then
-            mkdir -p "$INSTALL_DIR/lib"
-            cp tor/*.so* "$INSTALL_DIR/lib/" 2>/dev/null || true
+        # 复制依赖库 (递归查找所有 .so 文件)
+        mkdir -p "$INSTALL_DIR/lib"
+        find . -name "*.so*" -type f 2>/dev/null | while read lib; do
+            cp "$lib" "$INSTALL_DIR/lib/" 2>/dev/null || true
+        done
+        
+        # 检查是否有库文件
+        if ls "$INSTALL_DIR/lib"/*.so* 1>/dev/null 2>&1; then
+            log_info "已复制依赖库到 $INSTALL_DIR/lib/"
+        else
+            log_warn "未找到依赖库，可能需要从包管理器安装 libevent"
+            # 尝试安装 libevent
+            case $OS in
+                ubuntu|debian) apt-get install -y libevent-2.1-7 2>/dev/null || true ;;
+                centos|rhel|fedora|rocky) dnf install -y libevent 2>/dev/null || yum install -y libevent 2>/dev/null || true ;;
+            esac
         fi
-        rm -rf tor-bundle.tar.gz tor
+        
+        rm -rf tor-bundle.tar.gz tor data debug
         ln -sf "$BIN_DIR/tor" /usr/local/bin/tor
         log_info "Tor v${TOR_VERSION} 安装完成"
     else
@@ -396,9 +409,19 @@ configure_xray() {
         
         # 生成 x25519 密钥对
         log_info "生成 Reality 密钥..."
-        KEYS=$("$BIN_DIR/xray" x25519 2>/dev/null)
-        PRIVATE_KEY=$(echo "$KEYS" | grep "Private" | awk '{print $3}')
-        PUBLIC_KEY=$(echo "$KEYS" | grep "Public" | awk '{print $3}')
+        KEYS=$("$BIN_DIR/xray" x25519 2>&1)
+        # 解析密钥 (格式: Private key: xxx / Public key: xxx)
+        PRIVATE_KEY=$(echo "$KEYS" | grep -i "private" | awk -F': ' '{print $2}' | tr -d ' ')
+        PUBLIC_KEY=$(echo "$KEYS" | grep -i "public" | awk -F': ' '{print $2}' | tr -d ' ')
+        
+        # 备用解析方式
+        if [ -z "$PRIVATE_KEY" ]; then
+            PRIVATE_KEY=$(echo "$KEYS" | head -1 | awk '{print $NF}')
+            PUBLIC_KEY=$(echo "$KEYS" | tail -1 | awk '{print $NF}')
+        fi
+        
+        log_info "Private Key: ${PRIVATE_KEY:0:10}..."
+        log_info "Public Key: ${PUBLIC_KEY:0:10}..."
         
         # 生成 shortId
         SHORT_ID=$(head -c 8 /dev/urandom | xxd -p)
@@ -529,7 +552,7 @@ EOF
 create_systemd_services() {
     log_step "创建 systemd 服务..."
     
-    # Tor 服务
+    # Tor 服务 (添加 LD_LIBRARY_PATH 以加载依赖库)
     cat > /etc/systemd/system/tor.service << EOF
 [Unit]
 Description=Tor Anonymity Network
@@ -538,6 +561,7 @@ After=network.target
 [Service]
 Type=simple
 User=tor
+Environment="LD_LIBRARY_PATH=$INSTALL_DIR/lib"
 ExecStart=$BIN_DIR/tor -f /etc/tor/torrc
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
